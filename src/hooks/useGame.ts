@@ -3,11 +3,6 @@ import Peer from 'peerjs';
 import { generateMaze } from '../utils/maze';
 
 const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b'];
-const DIFF_SETTINGS = {
-  easy: { size: 15 },
-  hard: { size: 31 },
-  ultra: { size: 51 }
-};
 
 export function useGame() {
   const [peer, setPeer] = useState<any>(null);
@@ -15,38 +10,27 @@ export function useGame() {
   const [gameState, setGameState] = useState('LOBBY');
   const [players, setPlayers] = useState([]);
   const [maze, setMaze] = useState([]);
-  const [cellHistory, setCellHistory] = useState([]); 
+  const [cellHistory, setCellHistory] = useState([]); // Массив строк "x-y"
   const [isHost, setIsHost] = useState(false);
   const [playerName, setPlayerName] = useState('');
   
   const connsRef = useRef([]);
   const mazeRef = useRef([]);
-  const playersRef = useRef([]);
+
+  useEffect(() => { mazeRef.current = maze; }, [maze]);
 
   useEffect(() => {
-    mazeRef.current = maze;
-    playersRef.current = players;
-  }, [maze, players]);
-
-  useEffect(() => {
-    const newPeer = new Peer({
-      config: { 'iceServers': [{ url: 'stun:stun.l.google.com:19302' }] }
-    });
+    const newPeer = new Peer({ config: { 'iceServers': [{ url: 'stun:stun.l.google.com:19302' }] } });
     newPeer.on('open', (id) => setMyId(id));
     setPeer(newPeer);
     return () => newPeer.destroy();
   }, []);
-
-  const broadcast = (data: any) => {
-    connsRef.current.forEach(c => c.open && c.send(data));
-  };
 
   const move = useCallback((dir: string) => {
     if (gameState !== 'PLAYING') return;
     setPlayers(prev => {
       const me = prev.find(p => p.id === myId);
       if (!me || me.finished || !mazeRef.current.length) return prev;
-      
       const cell = mazeRef.current[me.pos.y][me.pos.x];
       const next = { ...me.pos };
       
@@ -60,93 +44,79 @@ export function useGame() {
       const finished = next.x === mazeRef.current[0].length - 1 && next.y === mazeRef.current.length - 1;
       const up = prev.map(p => p.id === myId ? { ...p, pos: next, finished } : p);
       
-      // ОСТАВЛЯЕМ СЛЕД (Функциональное обновление, чтобы не было ошибок)
-      setCellHistory(historyPrev => {
-        const exists = historyPrev.some(h => h.x === next.x && h.y === next.y);
-        if (exists) return historyPrev;
-        return [...historyPrev, { x: next.x, y: next.y, color: '#3b82f6' }];
+      // ОБНОВЛЯЕМ СЛЕД
+      setCellHistory(h => {
+        const key = `${next.x}-${next.y}`;
+        return h.includes(key) ? h : [...h, key];
       });
       
-      if (isHost) broadcast({ type: 'PLAYERS_UPDATE', players: up });
+      if (isHost) connsRef.current.forEach(c => c.open && c.send({ type: 'PLAYERS_UPDATE', players: up }));
       else connsRef.current[0]?.send({ type: 'MOVE', pos: next, finished });
       
       return up;
     });
   }, [myId, isHost, gameState]);
 
+  // Кнопки управления
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
-      if (k === 'w' || k === 'arrowup') move('up');
-      if (k === 's' || k === 'arrowdown') move('down');
-      if (k === 'a' || k === 'arrowleft') move('left');
-      if (k === 'd' || k === 'arrowright') move('right');
+      if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
+        e.preventDefault();
+        if (k === 'w' || k === 'arrowup') move('up');
+        if (k === 's' || k === 'arrowdown') move('down');
+        if (k === 'a' || k === 'arrowleft') move('left');
+        if (k === 'd' || k === 'arrowright') move('right');
+      }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
   }, [move]);
 
-  const handleHost = async (diff: 'easy' | 'hard' | 'ultra') => {
+  const handleHost = async (diff: string) => {
     if (!playerName) return;
     setIsHost(true);
-    const size = DIFF_SETTINGS[diff].size;
+    const size = diff === 'easy' ? 15 : diff === 'hard' ? 31 : 51;
     const newMaze = generateMaze(size, size, diff);
     setMaze(newMaze);
-    setCellHistory([{ x: 0, y: 0, color: '#3b82f6' }]);
+    setCellHistory(['0-0']);
     setPlayers([{ id: myId, name: playerName, color: COLORS[0], pos: { x: 0, y: 0 }, finished: false }]);
     setGameState('WAITING');
-
-    await fetch('/api/rooms', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: myId, hostName: playerName, difficulty: diff })
-    });
-
+    await fetch('/api/rooms', { method: 'POST', body: JSON.stringify({ id: myId, hostName: playerName, difficulty: diff }), headers: {'Content-Type': 'application/json'} });
     peer.on('connection', (conn) => {
       conn.on('open', () => {
         connsRef.current.push(conn);
-        conn.send({ type: 'INIT', maze: mazeRef.current, players: playersRef.current });
+        conn.send({ type: 'INIT', maze: newMaze, players: [{ id: myId, name: playerName, color: COLORS[0], pos: { x: 0, y: 0 } }] });
       });
       conn.on('data', (data: any) => {
         if (data.type === 'JOIN') {
-          const p = { id: conn.peer, name: data.name, color: COLORS[playersRef.current.length % 4], pos: { x: 0, y: 0 }, finished: false };
-          const up = [...playersRef.current, p];
-          setPlayers(up);
-          broadcast({ type: 'PLAYERS_UPDATE', players: up });
+          setPlayers(p => {
+            const up = [...p, { id: conn.peer, name: data.name, color: COLORS[p.length % 4], pos: { x: 0, y: 0 } }];
+            connsRef.current.forEach(c => c.open && c.send({ type: 'PLAYERS_UPDATE', players: up }));
+            return up;
+          });
         }
         if (data.type === 'MOVE') {
-          const up = playersRef.current.map(p => p.id === conn.peer ? { ...p, pos: data.pos, finished: data.finished } : p);
-          setPlayers(up);
-          broadcast({ type: 'PLAYERS_UPDATE', players: up });
+          setPlayers(p => {
+            const up = p.map(player => player.id === conn.peer ? { ...player, pos: data.pos, finished: data.finished } : player);
+            connsRef.current.forEach(c => c.open && c.send({ type: 'PLAYERS_UPDATE', players: up }));
+            return up;
+          });
         }
       });
     });
   };
 
-  const handleJoin = useCallback((targetId: string) => {
-    setGameState('WAITING'); 
-    const conn = peer.connect(targetId);
-    conn.on('open', () => {
-      connsRef.current = [conn];
-      conn.send({ type: 'JOIN', name: playerName });
-    });
+  const handleJoin = useCallback((id: string) => {
+    setGameState('WAITING');
+    const conn = peer.connect(id);
+    conn.on('open', () => { connsRef.current = [conn]; conn.send({ type: 'JOIN', name: playerName }); });
     conn.on('data', (data: any) => {
-      if (data.type === 'INIT') { 
-        setMaze(data.maze); 
-        setPlayers(data.players); 
-        setCellHistory([{ x: 0, y: 0, color: '#3b82f6' }]);
-      }
+      if (data.type === 'INIT') { setMaze(data.maze); setPlayers(data.players); setCellHistory(['0-0']); }
       if (data.type === 'PLAYERS_UPDATE') setPlayers(data.players);
       if (data.type === 'GAME_START') setGameState('PLAYING');
     });
-  }, [peer, playerName]); // ТЕПЕРЬ ТУТ ВСЁ ПРАВИЛЬНО
+  }, [peer, playerName]);
 
-  return { 
-    myId, playerName, setPlayerName, gameState, players, maze, 
-    cellHistory, isHost, handleHost, handleJoin, 
-    handleStart: () => {
-      setGameState('PLAYING');
-      broadcast({ type: 'GAME_START' });
-    }, move 
-  };
+  return { myId, playerName, setPlayerName, gameState, players, maze, cellHistory, isHost, handleHost, handleJoin, handleStart: () => { setGameState('PLAYING'); connsRef.current.forEach(c => c.open && c.send({ type: 'GAME_START' })); }, move };
 }
