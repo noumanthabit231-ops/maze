@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Peer from 'peerjs';
 import { generateMaze } from '../utils/maze';
 
+const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b'];
 const DIFF_SETTINGS = {
-  easy: { size: 15, label: 'Легко' },
-  hard: { size: 31, label: 'Сложно' },
-  ultra: { size: 51, label: 'УЛЬТРА' }
+  easy: { size: 15 },
+  hard: { size: 31 },
+  ultra: { size: 51 }
 };
 
 export function useGame() {
@@ -16,7 +17,15 @@ export function useGame() {
   const [maze, setMaze] = useState([]);
   const [isHost, setIsHost] = useState(false);
   const [playerName, setPlayerName] = useState('');
+  
   const connsRef = useRef([]);
+  const mazeRef = useRef([]);
+  const playersRef = useRef([]);
+
+  useEffect(() => {
+    mazeRef.current = maze;
+    playersRef.current = players;
+  }, [maze, players]);
 
   useEffect(() => {
     const newPeer = new Peer({
@@ -27,13 +36,50 @@ export function useGame() {
     return () => newPeer.destroy();
   }, []);
 
-  const handleHost = async (diff = 'easy') => {
+  const broadcast = (data: any) => {
+    connsRef.current.forEach(c => c.open && c.send(data));
+  };
+
+  const move = useCallback((dir: string) => {
+    if (gameState !== 'PLAYING') return;
+    setPlayers(prev => {
+      const me = prev.find(p => p.id === myId);
+      if (!me || me.finished || !mazeRef.current.length) return prev;
+      const cell = mazeRef.current[me.pos.y][me.pos.x];
+      const next = { ...me.pos };
+      if (dir === 'up' && !cell.walls.top) next.y--;
+      else if (dir === 'down' && !cell.walls.bottom) next.y++;
+      else if (dir === 'left' && !cell.walls.left) next.x--;
+      else if (dir === 'right' && !cell.walls.right) next.x++;
+      if (next.x === me.pos.x && next.y === me.pos.y) return prev;
+      const finished = next.x === mazeRef.current[0].length - 1 && next.y === mazeRef.current.length - 1;
+      const up = prev.map(p => p.id === myId ? { ...p, pos: next, finished } : p);
+      if (isHost) broadcast({ type: 'PLAYERS_UPDATE', players: up });
+      else connsRef.current[0]?.send({ type: 'MOVE', pos: next, finished });
+      return up;
+    });
+  }, [myId, isHost, gameState]);
+
+  // УПРАВЛЕНИЕ (КЛАВА)
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      if (k === 'w' || k === 'arrowup') move('up');
+      if (k === 's' || k === 'arrowdown') move('down');
+      if (k === 'a' || k === 'arrowleft') move('left');
+      if (k === 'd' || k === 'arrowright') move('right');
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [move]);
+
+  const handleHost = async (diff: 'easy' | 'hard' | 'ultra') => {
     if (!playerName) return;
     setIsHost(true);
     const size = DIFF_SETTINGS[diff].size;
-    const newMaze = generateMaze(size, size, diff); // Передаем сложность
+    const newMaze = generateMaze(size, size, diff);
     setMaze(newMaze);
-    setPlayers([{ id: myId, name: playerName, color: '#3b82f6', pos: { x: 0, y: 0 }, finished: false }]);
+    setPlayers([{ id: myId, name: playerName, color: COLORS[0], pos: { x: 0, y: 0 }, finished: false }]);
     setGameState('WAITING');
 
     await fetch('/api/rooms', {
@@ -45,31 +91,32 @@ export function useGame() {
     peer.on('connection', (conn) => {
       conn.on('open', () => {
         connsRef.current.push(conn);
-        conn.send({ type: 'INIT', maze: newMaze, players: [{ id: myId, name: playerName, color: '#3b82f6', pos: { x: 0, y: 0 } }] });
+        conn.send({ type: 'INIT', maze: mazeRef.current, players: playersRef.current });
       });
-      conn.on('data', (data) => {
+      conn.on('data', (data: any) => {
         if (data.type === 'JOIN') {
-          const newPlayer = { id: conn.peer, name: data.name, color: '#ef4444', pos: { x: 0, y: 0 } };
-          setPlayers(prev => {
-            const up = [...prev, newPlayer];
-            connsRef.current.forEach(c => c.send({ type: 'PLAYERS_UPDATE', players: up }));
-            return up;
-          });
+          const p = { id: conn.peer, name: data.name, color: COLORS[playersRef.current.length % 4], pos: { x: 0, y: 0 }, finished: false };
+          const up = [...playersRef.current, p];
+          setPlayers(up);
+          broadcast({ type: 'PLAYERS_UPDATE', players: up });
+        }
+        if (data.type === 'MOVE') {
+          const up = playersRef.current.map(p => p.id === conn.peer ? { ...p, pos: data.pos, finished: data.finished } : p);
+          setPlayers(up);
+          broadcast({ type: 'PLAYERS_UPDATE', players: up });
         }
       });
     });
   };
 
-  const handleJoin = (targetId) => {
-    if (!peer || !playerName) return;
-    setGameState('WAITING'); // Форсируем смену экрана сразу
-    
+  const handleJoin = (targetId: string) => {
+    setGameState('WAITING'); // ФОРСИРОВАННЫЙ ВХОД
     const conn = peer.connect(targetId);
     conn.on('open', () => {
       connsRef.current = [conn];
       conn.send({ type: 'JOIN', name: playerName });
     });
-    conn.on('data', (data) => {
+    conn.on('data', (data: any) => {
       if (data.type === 'INIT') { setMaze(data.maze); setPlayers(data.players); }
       if (data.type === 'PLAYERS_UPDATE') setPlayers(data.players);
       if (data.type === 'GAME_START') setGameState('PLAYING');
@@ -78,6 +125,6 @@ export function useGame() {
 
   return { myId, playerName, setPlayerName, gameState, players, maze, isHost, handleHost, handleJoin, handleStart: () => {
     setGameState('PLAYING');
-    connsRef.current.forEach(c => c.send({ type: 'GAME_START' }));
-  }};
+    broadcast({ type: 'GAME_START' });
+  }, move };
 }
