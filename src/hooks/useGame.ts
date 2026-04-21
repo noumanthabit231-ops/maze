@@ -9,16 +9,13 @@ const DIFF_SETTINGS = {
   ultra: { size: 51 }
 };
 
-// Тип для истории следа
-export type MazeCellHistory = { x: number, y: number, color: string };
-
 export function useGame() {
   const [peer, setPeer] = useState<any>(null);
   const [myId, setMyId] = useState('');
   const [gameState, setGameState] = useState('LOBBY');
   const [players, setPlayers] = useState([]);
   const [maze, setMaze] = useState([]);
-  const [cellHistory, setCellHistory] = useState<MazeCellHistory[]>([]); // Добавили историю следов
+  const [cellHistory, setCellHistory] = useState([]); 
   const [isHost, setIsHost] = useState(false);
   const [playerName, setPlayerName] = useState('');
   
@@ -49,8 +46,10 @@ export function useGame() {
     setPlayers(prev => {
       const me = prev.find(p => p.id === myId);
       if (!me || me.finished || !mazeRef.current.length) return prev;
+      
       const cell = mazeRef.current[me.pos.y][me.pos.x];
       const next = { ...me.pos };
+      
       if (dir === 'up' && !cell.walls.top) next.y--;
       else if (dir === 'down' && !cell.walls.bottom) next.y++;
       else if (dir === 'left' && !cell.walls.left) next.x--;
@@ -61,19 +60,20 @@ export function useGame() {
       const finished = next.x === mazeRef.current[0].length - 1 && next.y === mazeRef.current.length - 1;
       const up = prev.map(p => p.id === myId ? { ...p, pos: next, finished } : p);
       
-      // ДОБАВЛЯЕМ В ИСТОРИЮ (СЛЕД)
-      if (!cellHistory.some(historyCell => historyCell.x === next.x && historyCell.y === next.y)) {
-        setCellHistory(historyPrev => [...historyPrev, { x: next.x, y: next.y, color: '#3b82f6' }]);
-      }
+      // ОСТАВЛЯЕМ СЛЕД (Функциональное обновление, чтобы не было ошибок)
+      setCellHistory(historyPrev => {
+        const exists = historyPrev.some(h => h.x === next.x && h.y === next.y);
+        if (exists) return historyPrev;
+        return [...historyPrev, { x: next.x, y: next.y, color: '#3b82f6' }];
+      });
       
       if (isHost) broadcast({ type: 'PLAYERS_UPDATE', players: up });
       else connsRef.current[0]?.send({ type: 'MOVE', pos: next, finished });
       
       return up;
     });
-  }, [myId, isHost, gameState, cellHistory]);
+  }, [myId, isHost, gameState]);
 
-  // УПРАВЛЕНИЕ (КЛАВА)
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
@@ -92,7 +92,6 @@ export function useGame() {
     const size = DIFF_SETTINGS[diff].size;
     const newMaze = generateMaze(size, size, diff);
     setMaze(newMaze);
-    // Инициализируем историю при создании игры
     setCellHistory([{ x: 0, y: 0, color: '#3b82f6' }]);
     setPlayers([{ id: myId, name: playerName, color: COLORS[0], pos: { x: 0, y: 0 }, finished: false }]);
     setGameState('WAITING');
@@ -124,7 +123,7 @@ export function useGame() {
     });
   };
 
-  const handleJoin = (targetId: string) => {
+  const handleJoin = useCallback((targetId: string) => {
     setGameState('WAITING'); 
     const conn = peer.connect(targetId);
     conn.on('open', () => {
@@ -132,14 +131,22 @@ export function useGame() {
       conn.send({ type: 'JOIN', name: playerName });
     });
     conn.on('data', (data: any) => {
-      if (data.type === 'INIT') { setMaze(data.maze); setPlayers(data.players); }
+      if (data.type === 'INIT') { 
+        setMaze(data.maze); 
+        setPlayers(data.players); 
+        setCellHistory([{ x: 0, y: 0, color: '#3b82f6' }]);
+      }
       if (data.type === 'PLAYERS_UPDATE') setPlayers(data.players);
       if (data.type === 'GAME_START') setGameState('PLAYING');
     });
-  }, []);
+  }, [peer, playerName]); // ТЕПЕРЬ ТУТ ВСЁ ПРАВИЛЬНО
 
-  return { myId, playerName, setPlayerName, gameState, players, maze, cellHistory, isHost, handleHost, handleJoin, handleStart: () => {
-    setGameState('PLAYING');
-    broadcast({ type: 'GAME_START' });
-  }, move };
+  return { 
+    myId, playerName, setPlayerName, gameState, players, maze, 
+    cellHistory, isHost, handleHost, handleJoin, 
+    handleStart: () => {
+      setGameState('PLAYING');
+      broadcast({ type: 'GAME_START' });
+    }, move 
+  };
 }
