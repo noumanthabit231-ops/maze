@@ -1,44 +1,50 @@
+import { createClient } from 'redis';
+
+// Создаем клиента один раз вне обработчика, чтобы не плодить соединения
+let client;
+
+const getClient = async () => {
+  if (!client) {
+    // Vercel сам подставит REDIS_URL из настроек проекта
+    client = createClient({ url: process.env.REDIS_URL || process.env.storage_REDIS_URL });
+    client.on('error', (err) => console.log('Redis Client Error', err));
+    await client.connect();
+  }
+  return client;
+};
+
 export default async function handler(req, res) {
-  // Твои данные из Vercel Storage (REST API)
-  const url = process.env.KV_REST_API_URL;
-  const token = process.env.KV_REST_API_TOKEN;
-
-  const headers = { Authorization: `Bearer ${token}` };
-
   try {
-    // 1. Получить список комнат (GET)
+    const redis = await getClient();
+
+    // 1. Получить список всех комнат (GET)
     if (req.method === 'GET') {
-      const response = await fetch(`${url}/keys/room:*`, { headers });
-      const { result: keys } = await response.json();
-
-      if (!keys || keys.length === 0) return res.status(200).json([]);
-
-      // Получаем данные по всем ключам
-      const rooms = [];
-      for (const key of keys) {
-        const r = await fetch(`${url}/get/${key}`, { headers });
-        const { result } = await r.json();
-        if (result) rooms.push(JSON.parse(result));
-      }
-
+      const keys = await redis.keys('room:*');
+      if (keys.length === 0) return res.status(200).json([]);
+      
+      const rawRooms = await redis.mGet(keys);
+      const rooms = rawRooms
+        .filter(r => r !== null)
+        .map(r => JSON.parse(r));
+        
       return res.status(200).json(rooms);
     }
 
     // 2. Создать комнату (POST)
     if (req.method === 'POST') {
       const { id, hostName } = req.body;
-      const roomData = JSON.stringify({ id, hostName, players: 1 });
+      if (!id || !hostName) return res.status(400).json({ error: 'Missing data' });
       
-      // Записываем в Redis через HTTP (EX 300 - живет 5 минут)
-      await fetch(`${url}/set/room:${id}/${encodeURIComponent(roomData)}/EX/300`, { 
-        headers 
-      });
-
+      const roomData = JSON.stringify({ id, hostName, players: 1 });
+      // Сохраняем на 5 минут (300 секунд)
+      await redis.set(`room:${id}`, roomData, { EX: 300 });
+      
       return res.status(200).json({ success: true });
     }
 
     return res.status(405).json({ error: 'Method not allowed' });
   } catch (e) {
+    console.error('SERVER ERROR:', e);
     return res.status(500).json({ error: e.message });
   }
 }
