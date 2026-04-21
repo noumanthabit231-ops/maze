@@ -1,71 +1,67 @@
 import React from 'react';
 import Sketch from 'react-p5';
 import p5Types from 'p5';
-import { useGame, MazeCellHistory } from './hooks/useGame';
 
-const cellWidth = 32;
-const playerSize = 16;
-const backgroundColor = '#1a1d2e';
-const wallColor = '#475569';
+const CELL_SIZE = 25; // Уменьшим немного, чтобы Ultra влезала в экран
 
 export const MazeCanvas = ({ maze, players, cellHistory, myId }) => {
-  const width = maze[0]?.length * cellWidth || 0;
-  const height = maze?.length * cellWidth || 0;
-
   const setup = (p5: p5Types, canvasParentRef: Element) => {
-    p5.createCanvas(width, height).parent(canvasParentRef);
+    const w = maze[0].length * CELL_SIZE;
+    const h = maze.length * CELL_SIZE;
+    p5.createCanvas(w, h).parent(canvasParentRef);
   };
 
   const draw = (p5: p5Types) => {
-    p5.background(backgroundColor);
+    p5.background('#0f172a');
 
-    // 1. РИСУЕМ ИСТОРИЮ (СЛЕД)
-    // Рисуем это ДО стен, чтобы след был "под" ними.
+    // 1. Рисуем след (закрашиваем ячейки)
     p5.noStroke();
-    cellHistory.forEach(cell => {
-        p5.fill(p5.color(cell.color, 100)); // Добавили альфа-канал для прозрачности следа
-        p5.rect(cell.x * cellWidth, cell.y * cellWidth, cellWidth, cellWidth);
+    p5.fill('rgba(59, 130, 246, 0.3)');
+    cellHistory.forEach(key => {
+      const [x, y] = key.split('-').map(Number);
+      p5.rect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
     });
 
-    // 2. РИСУЕМ СТЕНЫ
+    // 2. Рисуем стены
+    p5.stroke('#475569');
     p5.strokeWeight(2);
-    p5.stroke(wallColor);
     maze.forEach((row, y) => {
       row.forEach((cell, x) => {
-        if (cell.walls.top) p5.line(x * cellWidth, y * cellWidth, (x + 1) * cellWidth, y * cellWidth);
-        if (cell.walls.right) p5.line((x + 1) * cellWidth, y * cellWidth, (x + 1) * cellWidth, (y + 1) * cellWidth);
-        if (cell.walls.bottom) p5.line(x * cellWidth, (y + 1) * cellWidth, (x + 1) * cellWidth, (y + 1) * cellWidth);
-        if (cell.walls.left) p5.line(x * cellWidth, y * cellWidth, x * cellWidth, (y + 1) * cellWidth);
+        const sx = x * CELL_SIZE;
+        const sy = y * CELL_SIZE;
+        if (cell.walls.top) p5.line(sx, sy, sx + CELL_SIZE, sy);
+        if (cell.walls.bottom) p5.line(sx, sy + CELL_SIZE, sx + CELL_SIZE, sy + CELL_SIZE);
+        if (cell.walls.left) p5.line(sx, sy, sx, sy + CELL_SIZE);
+        if (cell.walls.right) p5.line(sx + CELL_SIZE, sy, sx + CELL_SIZE, sy + CELL_SIZE);
       });
     });
 
-    // 3. РИСУЕМ ПЕРСОНАЖЕЙ (РОВНО И ПО ЦЕНТРУ)
+    // 3. Рисуем игроков (Центрировано!)
     p5.noStroke();
-    players.forEach(player => {
-      p5.fill(player.color);
-      // Формулы для идеального центрирования в ячейке
-      const centerX = (player.pos.x * cellWidth) + (cellWidth / 2);
-      const centerY = (player.pos.y * cellWidth) + (cellWidth / 2);
+    players.forEach(p => {
+      const px = p.pos.x * CELL_SIZE + CELL_SIZE / 2;
+      const py = p.pos.y * CELL_SIZE + CELL_SIZE / 2;
       
-      if (player.id === myId) {
-          // Рисуем тебя (синий круг) по центру ячейки
-          p5.ellipseMode(p5.RADIUS);
-          p5.ellipse(centerX, centerY, playerSize / 2);
+      p5.fill(p.color);
+      if (p.id === myId) {
+        p5.ellipse(px, py, CELL_SIZE * 0.6); // Ты — круг
+        p5.stroke(255);
+        p5.strokeWeight(2);
+        p5.noFill();
+        p5.ellipse(px, py, CELL_SIZE * 0.7); // Обводка вокруг тебя
       } else {
-          // Рисуем другого игрока (красный квадрат) по центру своей ячейки
-          // playerSize = 16, ячейка = 32. Квадрат заполнит половину ячейки.
-          p5.rectMode(p5.CENTER);
-          p5.rect(centerX, centerY, playerSize, playerSize);
-          p5.rectMode(p5.CORNER); // Сбрасываем режим
+        p5.rectMode(p5.CENTER);
+        p5.rect(px, py, CELL_SIZE * 0.6, CELL_SIZE * 0.6); // Другие — квадраты
+        p5.rectMode(p5.CORNER);
       }
     });
 
-    // Рисуем финиш (флажок)
-    const finishX = (maze[0].length - 1) * cellWidth + cellWidth / 2;
-    const finishY = (maze.length - 1) * cellWidth + cellWidth / 2;
-    p5.textSize(20);
+    // Финиш
+    const fx = (maze[0].length - 1) * CELL_SIZE + CELL_SIZE / 2;
+    const fy = (maze.length - 1) * CELL_SIZE + CELL_SIZE / 2;
+    p5.textSize(CELL_SIZE * 0.6);
     p5.textAlign(p5.CENTER, p5.CENTER);
-    p5.text('🏁', finishX, finishY);
+    p5.text('🏁', fx, fy);
   };
 
   return <Sketch setup={setup} draw={draw} />;
