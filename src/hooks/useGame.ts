@@ -5,6 +5,13 @@ import { GameState, Player, MazeCell } from '../types';
 
 const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b'];
 
+// Конфиг сложности
+const DIFF_SETTINGS = {
+  easy: { size: 11, label: 'Легко' },
+  hard: { size: 21, label: 'Сложно' },
+  ultra: { size: 35, label: 'УЛЬТРА' }
+};
+
 export function useGame() {
   const [peer, setPeer] = useState<Peer | null>(null);
   const [myId, setMyId] = useState('');
@@ -14,7 +21,7 @@ export function useGame() {
   const [maze, setMaze] = useState<MazeCell[][]>([]);
   const [isHost, setIsHost] = useState(false);
   const [playerName, setPlayerName] = useState('');
-  const [roomCode, setRoomCode] = useState('');
+  const [difficulty, setDifficulty] = useState<'easy' | 'hard' | 'ultra'>('easy');
 
   const playersRef = useRef<Player[]>([]);
   const connsRef = useRef<DataConnection[]>([]);
@@ -27,49 +34,43 @@ export function useGame() {
 
   useEffect(() => {
     const newPeer = new Peer({
-      config: {
-        'iceServers': [
-          { url: 'stun:stun.l.google.com:19302' },
-          { url: 'stun:stun1.l.google.com:19302' },
-          { url: 'stun:stun2.l.google.com:19302' }
-        ]
-      }
+      config: { 'iceServers': [{ url: 'stun:stun.l.google.com:19302' }] }
     });
-
     newPeer.on('open', (id) => { setMyId(id); setIsPeerReady(true); });
-    newPeer.on('error', (err) => {
-      console.error('PeerJS Error:', err.type);
-      setGameState('LOBBY');
-    });
-
     setPeer(newPeer);
     return () => newPeer.destroy();
   }, []);
 
   const broadcast = (data: any) => {
-    connsRef.current.forEach(c => { if(c.open) c.send(data); });
+    connsRef.current.forEach(c => c.open && c.send(data));
   };
 
-  const handleHost = useCallback(async () => {
+  // СОЗДАНИЕ ИГРЫ (ХОСТ)
+  const handleHost = useCallback(async (diff: 'easy' | 'hard' | 'ultra' = 'easy') => {
     if (!isPeerReady || !playerName) return;
+    
+    setDifficulty(diff);
     setIsHost(true);
-    const newMaze = generateMaze(13, 13);
+    const size = DIFF_SETTINGS[diff].size;
+    const newMaze = generateMaze(size, size);
     setMaze(newMaze);
+    
     const me = { id: myId, name: playerName, color: COLORS[0], pos: { x: 0, y: 0 }, trail: [], isReady: true, finished: false };
     setPlayers([me]);
     setGameState('WAITING');
 
+    // Регистрируем в Redis
     await fetch('/api/rooms', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: myId, hostName: playerName })
+      body: JSON.stringify({ id: myId, hostName: playerName, difficulty: diff })
     });
 
     peer?.on('connection', (conn) => {
       conn.on('open', () => {
-        console.log('✅ Входящее соединение от:', conn.peer);
         connsRef.current.push(conn);
-        conn.send({ type: 'INIT', maze: mazeRef.current, players: playersRef.current });
+        // Шлем текущую карту и настройки
+        conn.send({ type: 'INIT', maze: mazeRef.current, players: playersRef.current, difficulty: diff });
       });
 
       conn.on('data', (data: any) => {
@@ -80,7 +81,7 @@ export function useGame() {
           broadcast({ type: 'PLAYERS_UPDATE', players: up });
         }
         if (data.type === 'MOVE') {
-          const up = playersRef.current.map(p => p.id === conn.peer ? { ...p, pos: data.pos } : p);
+          const up = playersRef.current.map(p => p.id === conn.peer ? { ...p, pos: data.pos, finished: data.finished } : p);
           setPlayers(up);
           broadcast({ type: 'PLAYERS_UPDATE', players: up });
         }
@@ -88,49 +89,32 @@ export function useGame() {
     });
   }, [peer, myId, playerName, isPeerReady]);
 
+  // ВХОД В ИГРУ (КЛИЕНТ)
   const handleJoin = useCallback((targetId: string) => {
     if (!peer || !targetId || !playerName) return;
     
-    console.log('🚀 Попытка коннекта к:', targetId);
-    setGameState('WAITING'); // СРАЗУ переходим в ожидание, чтобы не залипать в меню
-    
-    const conn = peer.connect(targetId, {
-      reliable: true,
-      connectionPriority: 'high'
-    });
-    
-    // Таймаут: если через 7 секунд не подключились — сбрасываем
-    const timeout = setTimeout(() => {
-      if (connsRef.current.length === 0) {
-        console.error('⌛ Тайм-аут подключения');
-        setGameState('LOBBY');
-        alert('Не удалось достучаться до хоста. Попробуй еще раз.');
-      }
-    }, 7000);
+    console.log('🔗 Подключаюсь к:', targetId);
+    setGameState('WAITING'); // Сразу переключаем экран!
 
+    const conn = peer.connect(targetId, { reliable: true });
+    
     conn.on('open', () => {
-      clearTimeout(timeout);
-      console.log('📡 Соединение УСТАНОВЛЕНО');
       connsRef.current = [conn];
       conn.send({ type: 'JOIN', name: playerName });
     });
 
     conn.on('data', (data: any) => {
-      if (data.type === 'INIT') { 
-        console.log('📦 Данные карты получены');
-        setMaze(data.maze); 
-        setPlayers(data.players); 
+      if (data.type === 'INIT') {
+        setMaze(data.maze);
+        setPlayers(data.players);
+        setDifficulty(data.difficulty);
       }
       if (data.type === 'PLAYERS_UPDATE') setPlayers(data.players);
       if (data.type === 'GAME_START') setGameState('PLAYING');
     });
-
-    conn.on('error', (err) => {
-      console.error('Conn Error:', err);
-      setGameState('LOBBY');
-    });
   }, [peer, playerName]);
 
+  // ДВИЖЕНИЕ
   const move = useCallback((dir: 'up' | 'down' | 'left' | 'right') => {
     if (gameState !== 'PLAYING') return;
     
@@ -152,24 +136,31 @@ export function useGame() {
       const up = prev.map(p => p.id === myId ? { ...p, pos: next, finished } : p);
 
       if (isHost) broadcast({ type: 'PLAYERS_UPDATE', players: up });
-      else connsRef.current[0]?.send({ type: 'MOVE', pos: next });
+      else connsRef.current[0]?.send({ type: 'MOVE', pos: next, finished });
 
       return up;
     });
   }, [myId, isHost, gameState]);
 
+  // Управление
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (gameState !== 'PLAYING') return;
       const k = e.key.toLowerCase();
-      if (k === 'w' || k === 'arrowup') move('up');
-      if (k === 's' || k === 'arrowdown') move('down');
-      if (k === 'a' || k === 'arrowleft') move('left');
-      if (k === 'd' || k === 'arrowright') move('right');
+      if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
+        e.preventDefault();
+        if (k === 'w' || k === 'arrowup') move('up');
+        if (k === 's' || k === 'arrowdown') move('down');
+        if (k === 'a' || k === 'arrowleft') move('left');
+        if (k === 'd' || k === 'arrowright') move('right');
+      }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [gameState, move]);
+  }, [move]);
 
-  return { myId, isPeerReady, roomCode, setRoomCode, playerName, setPlayerName, gameState, players, maze, isHost, handleHost, handleJoin, handleStart: () => { setGameState('PLAYING'); broadcast({ type: 'GAME_START' }); }, move };
+  return { 
+    myId, isPeerReady, playerName, setPlayerName, gameState, players, 
+    maze, isHost, difficulty, handleHost, handleJoin, 
+    handleStart: () => { setGameState('PLAYING'); broadcast({ type: 'GAME_START' }); } 
+  };
 }
