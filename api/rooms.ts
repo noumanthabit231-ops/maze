@@ -1,38 +1,44 @@
-import Redis from 'ioredis';
-
-// Твой Redis от RedisLabs
-const redis = new Redis("redis://default:Bfuc7ZcI40a7NaJsjhztKvzKidMiEq0A@redis-19328.c277.us-east-1-3.ec2.cloud.redislabs.com:19328");
-
 export default async function handler(req, res) {
+  // Твои данные из Vercel Storage (REST API)
+  const url = process.env.KV_REST_API_URL;
+  const token = process.env.KV_REST_API_TOKEN;
+
+  const headers = { Authorization: `Bearer ${token}` };
+
   try {
-    // 1. Получить список комнат
+    // 1. Получить список комнат (GET)
     if (req.method === 'GET') {
-      const keys = await redis.keys('room:*');
-      if (keys.length === 0) return res.status(200).json([]);
-      
-      const roomsData = await redis.mget(...keys);
-      const rooms = roomsData
-        .filter(r => r !== null)
-        .map(r => JSON.parse(r as string));
-        
+      const response = await fetch(`${url}/keys/room:*`, { headers });
+      const { result: keys } = await response.json();
+
+      if (!keys || keys.length === 0) return res.status(200).json([]);
+
+      // Получаем данные по всем ключам
+      const rooms = [];
+      for (const key of keys) {
+        const r = await fetch(`${url}/get/${key}`, { headers });
+        const { result } = await r.json();
+        if (result) rooms.push(JSON.parse(result));
+      }
+
       return res.status(200).json(rooms);
     }
 
-    // 2. Создать комнату
+    // 2. Создать комнату (POST)
     if (req.method === 'POST') {
       const { id, hostName } = req.body;
-      if (!id || !hostName) return res.status(400).json({ error: 'No data' });
-      
       const roomData = JSON.stringify({ id, hostName, players: 1 });
-      // Сохраняем на 5 минут (300 секунд)
-      await redis.set(`room:${id}`, roomData, 'EX', 300);
       
+      // Записываем в Redis через HTTP (EX 300 - живет 5 минут)
+      await fetch(`${url}/set/room:${id}/${encodeURIComponent(roomData)}/EX/300`, { 
+        headers 
+      });
+
       return res.status(200).json({ success: true });
     }
 
     return res.status(405).json({ error: 'Method not allowed' });
-  } catch (e: any) {
-    console.error('REDIS ERROR:', e);
+  } catch (e) {
     return res.status(500).json({ error: e.message });
   }
 }
