@@ -1,26 +1,38 @@
-import { kv } from '@vercel/kv';
+import Redis from 'ioredis';
+
+// Твой Redis от RedisLabs
+const redis = new Redis("redis://default:Bfuc7ZcI40a7NaJsjhztKvzKidMiEq0A@redis-19328.c277.us-east-1-3.ec2.cloud.redislabs.com:19328");
 
 export default async function handler(req, res) {
   try {
+    // 1. Получить список комнат
     if (req.method === 'GET') {
-      const keys = await kv.keys('room:*');
-      if (!keys || keys.length === 0) return res.status(200).json([]);
-      const rooms = await kv.mget(...keys);
-      return res.status(200).json(rooms.filter(r => r !== null));
+      const keys = await redis.keys('room:*');
+      if (keys.length === 0) return res.status(200).json([]);
+      
+      const roomsData = await redis.mget(...keys);
+      const rooms = roomsData
+        .filter(r => r !== null)
+        .map(r => JSON.parse(r as string));
+        
+      return res.status(200).json(rooms);
     }
 
+    // 2. Создать комнату
     if (req.method === 'POST') {
       const { id, hostName } = req.body;
       if (!id || !hostName) return res.status(400).json({ error: 'No data' });
       
-      const roomData = { id, hostName, players: 1 };
-      await kv.set(`room:${id}`, roomData, { ex: 300 });
+      const roomData = JSON.stringify({ id, hostName, players: 1 });
+      // Сохраняем на 5 минут (300 секунд)
+      await redis.set(`room:${id}`, roomData, 'EX', 300);
+      
       return res.status(200).json({ success: true });
     }
 
     return res.status(405).json({ error: 'Method not allowed' });
-  } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'KV Error' });
+  } catch (e: any) {
+    console.error('REDIS ERROR:', e);
+    return res.status(500).json({ error: e.message });
   }
 }
