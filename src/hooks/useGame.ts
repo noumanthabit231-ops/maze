@@ -30,20 +30,16 @@ export function useGame() {
       config: {
         'iceServers': [
           { url: 'stun:stun.l.google.com:19302' },
-          { url: 'stun:stun1.l.google.com:19302' }
+          { url: 'stun:stun1.l.google.com:19302' },
+          { url: 'stun:stun2.l.google.com:19302' }
         ]
       }
     });
 
-    newPeer.on('open', (id) => { 
-      setMyId(id); 
-      setIsPeerReady(true); 
-      console.log('✅ PeerJS готов. ID:', id);
-    });
-
+    newPeer.on('open', (id) => { setMyId(id); setIsPeerReady(true); });
     newPeer.on('error', (err) => {
-      console.error('❌ Ошибка PeerJS:', err.type);
-      setIsPeerReady(false);
+      console.error('PeerJS Error:', err.type);
+      setGameState('LOBBY');
     });
 
     setPeer(newPeer);
@@ -70,15 +66,10 @@ export function useGame() {
     });
 
     peer?.on('connection', (conn) => {
-      console.log('📡 Кто-то стучится:', conn.peer);
       conn.on('open', () => {
+        console.log('✅ Входящее соединение от:', conn.peer);
         connsRef.current.push(conn);
-        // Сразу шлем данные новичку
-        conn.send({ 
-          type: 'INIT', 
-          maze: mazeRef.current, 
-          players: playersRef.current 
-        });
+        conn.send({ type: 'INIT', maze: mazeRef.current, players: playersRef.current });
       });
 
       conn.on('data', (data: any) => {
@@ -97,26 +88,36 @@ export function useGame() {
     });
   }, [peer, myId, playerName, isPeerReady]);
 
-  const handleJoin = useCallback((code?: string) => {
-    const target = code || roomCode;
-    if (!peer || !target || !playerName) return;
+  const handleJoin = useCallback((targetId: string) => {
+    if (!peer || !targetId || !playerName) return;
     
-    setRoomCode(target);
-    console.log('🛰 Пытаюсь войти в:', target);
+    console.log('🚀 Попытка коннекта к:', targetId);
+    setGameState('WAITING'); // СРАЗУ переходим в ожидание, чтобы не залипать в меню
     
-    const conn = peer.connect(target);
+    const conn = peer.connect(targetId, {
+      reliable: true,
+      connectionPriority: 'high'
+    });
     
+    // Таймаут: если через 7 секунд не подключились — сбрасываем
+    const timeout = setTimeout(() => {
+      if (connsRef.current.length === 0) {
+        console.error('⌛ Тайм-аут подключения');
+        setGameState('LOBBY');
+        alert('Не удалось достучаться до хоста. Попробуй еще раз.');
+      }
+    }, 7000);
+
     conn.on('open', () => {
-      console.log('🔓 Соединение открыто, шлю JOIN');
+      clearTimeout(timeout);
+      console.log('📡 Соединение УСТАНОВЛЕНО');
       connsRef.current = [conn];
       conn.send({ type: 'JOIN', name: playerName });
-      // Не ждем INIT, сразу переходим в экран ожидания, чтобы юзер видел прогресс
-      setGameState('WAITING'); 
     });
 
     conn.on('data', (data: any) => {
       if (data.type === 'INIT') { 
-        console.log('🗺 Карта получена');
+        console.log('📦 Данные карты получены');
         setMaze(data.maze); 
         setPlayers(data.players); 
       }
@@ -125,11 +126,10 @@ export function useGame() {
     });
 
     conn.on('error', (err) => {
-      console.error('❌ Ошибка коннекта:', err);
+      console.error('Conn Error:', err);
       setGameState('LOBBY');
-      alert('Не удалось подключиться к игроку');
     });
-  }, [peer, playerName, roomCode]);
+  }, [peer, playerName]);
 
   const move = useCallback((dir: 'up' | 'down' | 'left' | 'right') => {
     if (gameState !== 'PLAYING') return;
