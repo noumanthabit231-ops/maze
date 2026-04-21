@@ -9,12 +9,16 @@ const DIFF_SETTINGS = {
   ultra: { size: 51 }
 };
 
+// Тип для истории следа
+export type MazeCellHistory = { x: number, y: number, color: string };
+
 export function useGame() {
   const [peer, setPeer] = useState<any>(null);
   const [myId, setMyId] = useState('');
   const [gameState, setGameState] = useState('LOBBY');
   const [players, setPlayers] = useState([]);
   const [maze, setMaze] = useState([]);
+  const [cellHistory, setCellHistory] = useState<MazeCellHistory[]>([]); // Добавили историю следов
   const [isHost, setIsHost] = useState(false);
   const [playerName, setPlayerName] = useState('');
   
@@ -51,14 +55,23 @@ export function useGame() {
       else if (dir === 'down' && !cell.walls.bottom) next.y++;
       else if (dir === 'left' && !cell.walls.left) next.x--;
       else if (dir === 'right' && !cell.walls.right) next.x++;
+      
       if (next.x === me.pos.x && next.y === me.pos.y) return prev;
+      
       const finished = next.x === mazeRef.current[0].length - 1 && next.y === mazeRef.current.length - 1;
       const up = prev.map(p => p.id === myId ? { ...p, pos: next, finished } : p);
+      
+      // ДОБАВЛЯЕМ В ИСТОРИЮ (СЛЕД)
+      if (!cellHistory.some(historyCell => historyCell.x === next.x && historyCell.y === next.y)) {
+        setCellHistory(historyPrev => [...historyPrev, { x: next.x, y: next.y, color: '#3b82f6' }]);
+      }
+      
       if (isHost) broadcast({ type: 'PLAYERS_UPDATE', players: up });
       else connsRef.current[0]?.send({ type: 'MOVE', pos: next, finished });
+      
       return up;
     });
-  }, [myId, isHost, gameState]);
+  }, [myId, isHost, gameState, cellHistory]);
 
   // УПРАВЛЕНИЕ (КЛАВА)
   useEffect(() => {
@@ -79,6 +92,8 @@ export function useGame() {
     const size = DIFF_SETTINGS[diff].size;
     const newMaze = generateMaze(size, size, diff);
     setMaze(newMaze);
+    // Инициализируем историю при создании игры
+    setCellHistory([{ x: 0, y: 0, color: '#3b82f6' }]);
     setPlayers([{ id: myId, name: playerName, color: COLORS[0], pos: { x: 0, y: 0 }, finished: false }]);
     setGameState('WAITING');
 
@@ -110,7 +125,7 @@ export function useGame() {
   };
 
   const handleJoin = (targetId: string) => {
-    setGameState('WAITING'); // ФОРСИРОВАННЫЙ ВХОД
+    setGameState('WAITING'); 
     const conn = peer.connect(targetId);
     conn.on('open', () => {
       connsRef.current = [conn];
@@ -121,9 +136,9 @@ export function useGame() {
       if (data.type === 'PLAYERS_UPDATE') setPlayers(data.players);
       if (data.type === 'GAME_START') setGameState('PLAYING');
     });
-  };
+  }, []);
 
-  return { myId, playerName, setPlayerName, gameState, players, maze, isHost, handleHost, handleJoin, handleStart: () => {
+  return { myId, playerName, setPlayerName, gameState, players, maze, cellHistory, isHost, handleHost, handleJoin, handleStart: () => {
     setGameState('PLAYING');
     broadcast({ type: 'GAME_START' });
   }, move };
