@@ -2,43 +2,45 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  touch-action: none; /* Блокирует стандартные жесты браузера */
+/* ЦВЕТА ИГРОКОВ (ВЕРБЛЮДОВ) */
+.player-0 { @apply bg-blue-600; }
+.player-1 { @apply bg-red-600; }
+.player-2 { @apply bg-green-600; }
+.player-3 { @apply bg-amber-500; }
+
+body {
+  @apply bg-[#f3e5ab] text-slate-900; /* Цвет песка */
 }
 
-body, html {
-  margin: 0;
-  padding: 0;
-  width: 100vw;
-  height: 100vh;
-  overflow: hidden; /* Никаких скроллов */
-  background-color: #0f172a;
-  position: fixed; /* Чтобы экран не "прыгал" на айфонах */
+/* Стилизация SEGMENTS, чтобы они выглядели как Верблюды */
+.camel-segment {
+    border-radius: 8px; /* Округлые тела */
+    position: relative;
+    box-shadow: inset 0 -5px 0 rgba(0,0,0,0.1); /* Тень для объема */
 }
 
-/* Оверлей для поворота экрана */
-#rotate-overlay {
-  display: none;
+/* Горб */
+.camel-segment::after {
+    content: '';
+    position: absolute;
+    top: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 15px;
+    height: 10px;
+    background-color: inherit;
+    border-radius: 10px 10px 0 0;
 }
 
-@media (orientation: portrait) {
-  #rotate-overlay {
-    display: flex;
-    position: fixed;
-    inset: 0;
-    background: #1e293b;
-    color: white;
-    z-index: 9999;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    padding: 20px;
-  }
-}
-
-* {
-  -webkit-tap-highlight-color: transparent;
-  user-select: none;
-  -webkit-touch-callout: none;
+/* Голова Вожака (только для первого сегмента) */
+.camel-segment-0::before {
+    content: '';
+    position: absolute;
+    top: 5px;
+    right: -10px;
+    width: 15px;
+    height: 15px;
+    background-color: inherit;
+    border-radius: 0 10px 10px 0;
+    box-shadow: 2px 2px 0 rgba(0,0,0,0.1);
 }
