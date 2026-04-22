@@ -1,94 +1,96 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import Sketch from 'react-p5';
 import p5Types from 'p5';
-import { CaravanPhysics, Segment } from '../utils/physics';
+import { RenderUtils } from '../utils/render';
 
-const ARENA_WIDTH = 2000; // Огромная пустыня
-const ARENA_HEIGHT = 2000;
+interface Props {
+  myId: string;
+  players: any[];
+  food: any[];
+}
 
-export const GameCanvas = ({ myId, players, score, isHost, onGameOver }) => {
-  const [camera, setCamera] = React.useState({ x: 0, y: 0 });
+const ARENA_SIZE = 2000;
+
+export const GameCanvas: React.FC<Props> = ({ myId, players, food }) => {
+  // Координаты камеры (плавное следование)
+  const camera = useRef({ x: ARENA_SIZE / 2, y: ARENA_SIZE / 2 });
 
   const setup = (p5: p5Types, canvasParentRef: Element) => {
-    // ВАЖНО: Делаем канвас во весь экран, но рисуем внутри Арену
-    p5.createCanvas(p5.windowWidth, p5.windowHeight).parent(canvasParentRef);
-    p5.ellipseMode(p5.RADIUS);
-    p5.rectMode(p5.CENTER);
+    p5.createCanvas(window.innerWidth, window.innerHeight).parent(canvasParentRef);
+    p5.noStroke();
   };
 
   const draw = (p5: p5Types) => {
-    p5.background('#eec988'); // Цвет песка
+    // 1. Цвет глубокого песка
+    p5.background('#eec988');
 
-    const me = players.find(p => p.id === myId);
-    if (!me) return;
+    const me = players.find((p) => p.id === myId);
+    if (!me || !me.segments || me.segments.length === 0) return;
 
-    // Обновляем камеру за головой твоего верблюда
-    const targetCamX = p5.lerp(camera.x, me.segments[0].x - p5.width / 2, 0.1);
-    const targetCamY = p5.lerp(camera.y, me.segments[0].y - p5.height / 2, 0.1);
-    setCamera({ x: targetCamX, y: targetCamY });
+    const head = me.segments[0];
+
+    // 2. Плавное движение камеры за головой верблюда
+    camera.current.x = p5.lerp(camera.current.x, head.x, 0.1);
+    camera.current.y = p5.lerp(camera.current.y, head.y, 0.1);
 
     p5.push();
-    p5.translate(-camera.x, -camera.y);
+    // Центрируем камеру относительно экрана
+    p5.translate(p5.width / 2 - camera.current.x, p5.height / 2 - camera.current.y);
 
-    // Рисуем границы Арены
+    // 3. Рисуем сетку пустыни (дюны/песок)
+    p5.stroke('#e2bc7a');
+    p5.strokeWeight(1);
+    for (let x = 0; x <= ARENA_SIZE; x += 100) p5.line(x, 0, x, ARENA_SIZE);
+    for (let y = 0; y <= ARENA_SIZE; y += 100) p5.line(0, y, ARENA_SIZE, y);
+
+    // 4. Граница Арены (Песчаный борт)
     p5.noFill();
     p5.stroke('#c49e63');
-    p5.strokeWeight(10);
-    p5.rect(ARENA_WIDTH / 2, ARENA_HEIGHT / 2, ARENA_WIDTH, ARENA_HEIGHT);
+    p5.strokeWeight(15);
+    p5.rect(0, 0, ARENA_SIZE, ARENA_SIZE);
 
-    // Рисуем Пыль (Fog of War) по краям
-    for (let y = 0; y < ARENA_HEIGHT; y += 100) {
-      for (let x = 0; x < ARENA_WIDTH; x += 100) {
-          const dx = me.segments[0].x - x;
-          const dy = me.segments[0].y - y;
-          const d = Math.sqrt(dx*dx + dy*dy);
-          if (d > 350) {
-              p5.noStroke();
-              p5.fill(p5.color(196, 158, 99, 10)); // Прозрачный песок
-              p5.rect(x, y, 100, 100);
-          }
-      }
-    }
+    // 5. Отрисовка Еды (Верблюжат)
+    food.forEach((f) => {
+      RenderUtils.drawFood(p5, f.x, f.y, f.type);
+    });
 
-    // РИСУЕМ КАРАВАНЫ
-    p5.noStroke();
-    players.forEach(player => {
-      // 1. Рисуем Тела
-      p5.fill(p5.color(player.color + 'AA')); // Полупрозрачные
-      player.segments.forEach((seg, i) => {
-        if (i === 0) return; // Голову рисуем отдельно
-        p5.rect(seg.x, seg.y, 18, 18, 4); // Верблюжье телце
-      });
-
-      // 2. Рисуем Головы
-      p5.push();
-      p5.translate(player.segments[0].x, player.segments[0].y);
-      p5.rotate(player.segments[0].angle); // Поворачиваем по направлению движения
+    // 6. Отрисовка Игроков
+    players.forEach((player) => {
+      const isMe = player.id === myId;
       
-      p5.fill(player.color);
-      if (player.id === myId) {
-          p5.stroke(255); p5.strokeWeight(3);
+      // Сначала рисуем хвост (сегменты)
+      for (let i = player.segments.length - 1; i > 0; i--) {
+        const seg = player.segments[i];
+        RenderUtils.drawSegment(p5, seg.x, seg.y, seg.angle, player.color);
       }
-      p5.rect(0, 0, 30, 22, 10); // Удлиненная верблюжья голова
-      
-      // Глаза
-      p5.noStroke(); p5.fill(0);
-      p5.ellipse(8, -5, 2, 2); p5.ellipse(8, 5, 2, 2);
-      p5.pop();
+
+      // Затем рисуем голову вожака (чтобы она была поверх хвоста)
+      const headPos = player.segments[0];
+      RenderUtils.drawHead(
+        p5, 
+        headPos.x, 
+        headPos.y, 
+        headPos.angle, 
+        player.color, 
+        player.name, 
+        isMe
+      );
     });
 
     p5.pop();
 
-    // Рисуем Счёт на экране
-    p5.noStroke();
-    p5.fill(255);
-    p5.textSize(24);
-    p5.textAlign(p5.RIGHT, p5.TOP);
-    p5.text(`🐪 Караван: ${score} верблюдов`, p5.width - 20, 20);
+    // Эффект виньетки (затемнение по краям для фокуса)
+    p5.noFill();
+    for(let i = 0; i < 10; i++) {
+        p5.stroke(15, 23, 42, i * 10);
+        p5.strokeWeight(i * 20);
+        p5.rect(0, 0, p5.width, p5.height);
+    }
   };
 
-  // Обработка изменения размера окна
-  const windowResized = (p5: p5Types) => { p5.resizeCanvas(p5.windowWidth, p5.windowHeight); };
+  const windowResized = (p5: p5Types) => {
+    p5.resizeCanvas(window.innerWidth, window.innerHeight);
+  };
 
   return <Sketch setup={setup} draw={draw} windowResized={windowResized} />;
 };
