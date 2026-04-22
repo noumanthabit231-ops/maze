@@ -1,89 +1,175 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Peer from 'peerjs';
-import { CaravanPhysics, Segment } from '../utils/physics';
+import { CaravanPhysics } from '../utils/physics';
 
-const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b'];
+const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
+const lerp = (start: number, end: number, t: number) => start * (1 - t) + end * t;
 
 export function useGame() {
   const [myId, setMyId] = useState('');
-  const [gameState, setGameState] = useState('LOBBY');
+  const [gameState, setGameState] = useState<'LOBBY' | 'WAITING' | 'PLAYING'>('LOBBY');
   const [players, setPlayers] = useState([]);
-  const [food, setFood] = useState([]); // Верблюжата на карте
+  const [food, setFood] = useState([]);
   const [isHost, setIsHost] = useState(false);
   const [playerName, setPlayerName] = useState('');
   
-  // Управление
   const [velocity, setVelocity] = useState({ x: 0, y: 0 });
+  const [angle, setAngle] = useState(0);
   const [isDashing, setIsDashing] = useState(false);
 
-  const connsRef = useRef([]);
+  const connsRef = useRef<any[]>([]);
   const peerRef = useRef<any>(null);
+  const playersRef = useRef([]);
 
-  // 1. СПАВН ВЕРБЛЮЖАТ (Только для хоста)
+  useEffect(() => { playersRef.current = players; }, [players]);
+
+  // Инициализация PeerJS с защитой от "зависания"
   useEffect(() => {
-    if (!isHost || gameState !== 'PLAYING') return;
+    const initPeer = () => {
+      const peer = new Peer({
+        config: { 
+          'iceServers': [
+            { url: 'stun:stun.l.google.com:19302' },
+            { url: 'stun:stun1.l.google.com:19302' }
+          ] 
+        }
+      });
 
-    const spawnInterval = setInterval(() => {
-      if (food.length < 40) {
-        const newFood = {
-          id: Math.random().toString(36).substr(2, 9),
-          x: Math.random() * 1900 + 50,
-          y: Math.random() * 1900 + 50,
-          type: Math.random() > 0.8 ? 'GOLDEN' : 'NORMAL' // Золотые дают больше очков
-        };
-        setFood(prev => [...prev, newFood]);
-        // Рассылаем всем инфу о новой еде
-        connsRef.current.forEach(c => c.open && c.send({ type: 'FOOD_SPAWN', food: newFood }));
-      }
-    }, 3000);
+      peer.on('open', (id) => {
+        console.log('✅ Твой ID получен:', id);
+        setMyId(id);
+      });
 
-    return () => clearInterval(spawnInterval);
-  }, [isHost, gameState, food.length]);
+      peer.on('error', (err) => {
+        console.error('❌ Ошибка PeerJS:', err.type);
+        if (err.type === 'network') setTimeout(initPeer, 3000);
+      });
 
-  // 2. ЛОГИКА РЫВКА
+      peerRef.current = peer;
+    };
+
+    initPeer();
+    return () => peerRef.current?.destroy();
+  }, []);
+
+  const broadcast = (data: any) => {
+    connsRef.current.forEach(c => { if (c.open) c.send(data); });
+  };
+
+  // Логика рывка
   const handleDash = useCallback(() => {
+    if (isDashing) return;
     setPlayers(prev => {
       const me = prev.find(p => p.id === myId);
-      if (!me || me.segments.length < 2 || isDashing) return prev;
+      if (!me || me.segments.length < 2) return prev;
 
       setIsDashing(true);
-      
-      // Рывок тратит последнего верблюда
       const newSegments = me.segments.slice(0, -1);
-      
-      setTimeout(() => setIsDashing(false), 800); // Длительность рывка
+      setTimeout(() => setIsDashing(false), 800);
 
-      return prev.map(p => p.id === myId ? { ...p, segments: newSegments } : p);
+      const up = prev.map(p => p.id === myId ? { ...p, segments: newSegments } : p);
+      broadcast({ type: 'MOVE_UPDATE', id: myId, segments: newSegments });
+      return up;
     });
   }, [myId, isDashing]);
 
-  // 3. ОБРАБОТКА ПОЕДАНИЯ
-  const checkFoodCollision = (head: Segment) => {
-    const eaten = food.find(f => Math.sqrt((f.x - head.x)**2 + (f.y - head.y)**2) < 30);
-    if (eaten) {
-      setFood(prev => prev.filter(f => f.id !== eaten.id));
-      
-      setPlayers(prev => prev.map(p => {
-        if (p.id === myId) {
-          const last = p.segments[p.segments.length - 1];
-          return { ...p, segments: [...p.segments, { ...last }] };
-        }
-        return p;
-      }));
-
-      connsRef.current.forEach(c => c.open && c.send({ type: 'FOOD_EATEN', foodId: eaten.id, eaterId: myId }));
-    }
-  };
-
-  // Метод для интерфейса
   const setMoveInput = useCallback((x: number, y: number) => {
-    const speed = isDashing ? 8 : 4; // В рывке скорость в два раза выше
+    const speed = isDashing ? 8 : 4.5;
     setVelocity({ x: x * speed, y: y * speed });
+    if (Math.abs(x) > 0.05 || Math.abs(y) > 0.05) {
+      setAngle(Math.atan2(y, x));
+    }
   }, [isDashing]);
 
-  return { 
-    myId, setMyId, playerName, setPlayerName, gameState, setGameState, 
-    players, setPlayers, food, setFood, isHost, setIsHost, 
-    handleDash, setMoveInput, connsRef, peerRef, checkFoodCollision 
+  // Основной цикл синхронизации
+  useEffect(() => {
+    if (gameState !== 'PLAYING') return;
+    const interval = setInterval(() => {
+      setPlayers(prev => {
+        const me = prev.find(p => p.id === myId);
+        if (!me) return prev;
+
+        const head = me.segments[0];
+        const newHead = {
+          x: Math.max(0, Math.min(2000, head.x + velocity.x)),
+          y: Math.max(0, Math.min(2000, head.y + velocity.y)),
+          angle: angle
+        };
+
+        const newSegments = [...me.segments];
+        newSegments[0] = newHead;
+        const updated = CaravanPhysics.updateSegments(newSegments);
+        
+        const up = prev.map(p => p.id === myId ? { ...p, segments: updated } : p);
+        
+        if (isHost) broadcast({ type: 'PLAYERS_UPDATE', players: up });
+        else connsRef.current[0]?.send({ type: 'MOVE_UPDATE', id: myId, segments: updated });
+
+        return up;
+      });
+    }, 1000 / 60);
+    return () => clearInterval(interval);
+  }, [gameState, velocity, angle, myId, isHost]);
+
+  // Обработка Хоста
+  const handleHost = async () => {
+    if (!myId || !playerName) return;
+    setIsHost(true);
+    setPlayers([{ id: myId, name: playerName, color: COLORS[0], segments: [{ x: 1000, y: 1000, angle: 0 }] }]);
+    setGameState('WAITING');
+
+    await fetch('/api/rooms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: myId, hostName: playerName, type: 'arena' })
+    });
+
+    peerRef.current.on('connection', (conn: any) => {
+      conn.on('open', () => {
+        connsRef.current.push(conn);
+        conn.send({ type: 'INIT_ARENA', players: playersRef.current, food: [] });
+      });
+
+      conn.on('data', (data: any) => {
+        if (data.type === 'JOIN_ARENA') {
+          const newPlayer = {
+            id: conn.peer,
+            name: data.name,
+            color: COLORS[playersRef.current.length % COLORS.length],
+            segments: [{ x: 1000 + (Math.random() * 50), y: 1000, angle: 0 }]
+          };
+          const up = [...playersRef.current, newPlayer];
+          setPlayers(up);
+          broadcast({ type: 'PLAYERS_UPDATE', players: up });
+        }
+        if (data.type === 'MOVE_UPDATE') {
+          setPlayers(p => p.map(pl => pl.id === data.id ? { ...pl, segments: data.segments } : pl));
+        }
+      });
+    });
   };
+
+  const handleJoin = useCallback((id: string) => {
+    if (!id) return;
+    setGameState('WAITING');
+    const conn = peerRef.current.connect(id);
+    conn.on('open', () => {
+      connsRef.current = [conn];
+      conn.send({ type: 'JOIN_ARENA', name: playerName });
+    });
+    conn.on('data', (data: any) => {
+      if (data.type === 'INIT_ARENA' || data.type === 'PLAYERS_UPDATE') setPlayers(data.players);
+      if (data.type === 'MOVE_UPDATE') {
+        setPlayers(p => p.map(pl => pl.id === data.id ? { ...pl, segments: data.segments } : pl));
+      }
+      if (data.type === 'GAME_START') setGameState('PLAYING');
+    });
+  }, [playerName]);
+
+  const handleStart = () => {
+    setGameState('PLAYING');
+    broadcast({ type: 'GAME_START' });
+  };
+
+  return { myId, playerName, setPlayerName, gameState, players, food, isHost, handleHost, handleJoin, handleStart, setMoveInput, handleDash };
 }
