@@ -1,56 +1,55 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 interface KeyboardProps {
   onMove: (x: number, y: number) => void;
-  onSpit: () => void;
+  onDash: () => void;
   enabled: boolean;
 }
 
-export const useKeyboard = ({ onMove, onSpit, enabled }: KeyboardProps) => {
+export const useKeyboard = ({ onMove, onDash, enabled }: KeyboardProps) => {
+  // Используем реф для хранения состояния клавиш, чтобы избежать лишних рендеров
+  const keys = useRef({
+    w: false, a: false, s: false, d: false,
+    ArrowUp: false, ArrowLeft: false, ArrowDown: false, ArrowRight: false
+  });
+
   useEffect(() => {
     if (!enabled) return;
-
-    // Состояние зажатых клавиш
-    const keys = {
-      w: false, a: false, s: false, d: false,
-      ArrowUp: false, ArrowLeft: false, ArrowDown: false, ArrowRight: false
-    };
 
     const updateMovement = () => {
       let x = 0;
       let y = 0;
+      const k = keys.current;
 
-      if (keys.w || keys.ArrowUp) y -= 1;
-      if (keys.s || keys.ArrowDown) y += 1;
-      if (keys.a || keys.ArrowLeft) x -= 1;
-      if (keys.d || keys.ArrowRight) x += 1;
+      if (k.w || k.ArrowUp) y -= 1;
+      if (k.s || k.ArrowDown) y += 1;
+      if (k.a || k.ArrowLeft) x -= 1;
+      if (k.d || k.ArrowRight) x += 1;
 
-      // Нормализация вектора (чтобы диагональ не была быстрее)
+      // Нормализация, чтобы по диагонали не бегал как угорелый
       if (x !== 0 && y !== 0) {
-        const length = Math.sqrt(x * x + y * y);
-        x /= length;
-        y /= length;
+        const len = Math.sqrt(x * x + y * y);
+        x /= len;
+        y /= len;
       }
 
       onMove(x, y);
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Кнопка атаки - Пробел
       if (e.code === 'Space') {
         e.preventDefault();
-        onSpit();
+        onDash();
       }
-
-      if (e.key in keys) {
-        keys[e.key as keyof typeof keys] = true;
+      if (e.key in keys.current) {
+        keys.current[e.key as keyof typeof keys.current] = true;
         updateMovement();
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key in keys) {
-        keys[e.key as keyof typeof keys] = false;
+      if (e.key in keys.current) {
+        keys.current[e.key as keyof typeof keys.current] = false;
         updateMovement();
       }
     };
@@ -62,5 +61,5 @@ export const useKeyboard = ({ onMove, onSpit, enabled }: KeyboardProps) => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [onMove, onSpit, enabled]);
+  }, [onMove, onDash, enabled]);
 };
