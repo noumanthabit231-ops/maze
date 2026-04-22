@@ -1,46 +1,28 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
-/* ЦВЕТА ИГРОКОВ (ВЕРБЛЮДОВ) */
-.player-0 { @apply bg-blue-600; }
-.player-1 { @apply bg-red-600; }
-.player-2 { @apply bg-green-600; }
-.player-3 { @apply bg-amber-500; }
-
-body {
-  @apply bg-[#f3e5ab] text-slate-900; /* Цвет песка */
+:root {
+  touch-action: none;
 }
 
-/* Стилизация SEGMENTS, чтобы они выглядели как Верблюды */
-.camel-segment {
-    border-radius: 8px; /* Округлые тела */
-    position: relative;
-    box-shadow: inset 0 -5px 0 rgba(0,0,0,0.1); /* Тень для объема */
+body, html {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background-color: #f3e5ab; /* Цвет песка */
 }
 
-/* Горб */
-.camel-segment::after {
-    content: '';
-    position: absolute;
-    top: -10px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 15px;
-    height: 10px;
-    background-color: inherit;
-    border-radius: 10px 10px 0 0;
+#rotate-overlay {
+  display: none;
 }
 
-/* Голова Вожака (только для первого сегмента) */
-.camel-segment-0::before {
-    content: '';
-    position: absolute;
-    top: 5px;
-    right: -10px;
-    width: 15px;
-    height: 15px;
-    background-color: inherit;
-    border-radius: 0 10px 10px 0;
-    box-shadow: 2px 2px 0 rgba(0,0,0,0.1);
+@media (orientation: portrait) {
+  #rotate-overlay {
+    display: flex;
+  }
+}
+
+canvas {
+  display: block;
 }
