@@ -2,32 +2,43 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ВАЖНО: Для Mobile Legends стиля */
+:root {
+  touch-action: none; /* Блокирует стандартные жесты браузера */
+}
+
+body, html {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden; /* Никаких скроллов */
+  background-color: #0f172a;
+  position: fixed; /* Чтобы экран не "прыгал" на айфонах */
+}
+
+/* Оверлей для поворота экрана */
+#rotate-overlay {
+  display: none;
+}
+
+@media (orientation: portrait) {
+  #rotate-overlay {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    background: #1e293b;
+    color: white;
+    z-index: 9999;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 20px;
+  }
+}
+
 * {
-    -webkit-tap-highlight-color: transparent;
-    user-select: none;
-    -webkit-user-select: none;
-}
-
-body {
-    margin: 0;
-    padding: 0;
-    background-color: #0f172a;
-    overflow: hidden;
-    height: 100vh;
-    width: 100vw;
-}
-
-/* Принудительный landscape для App */
-@media screen and (orientation: portrait) {
-    body {
-        transform: rotate(-90deg);
-        transform-origin: left top;
-        width: 100vh;
-        height: 100vw;
-        overflow-x: hidden;
-        position: absolute;
-        top: 100%;
-        left: 0;
-    }
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
