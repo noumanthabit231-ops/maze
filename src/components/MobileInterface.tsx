@@ -1,101 +1,129 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 
-interface Props {
+interface MobileInterfaceProps {
   score: number;
   onMove: (x: number, y: number) => void;
-  onSpit: () => void;
+  onDash: () => void;
 }
 
-export const MobileInterface: React.FC<Props> = ({ score, onMove, onSpit }) => {
-  const [touch, setTouch] = useState<{ active: boolean; startX: number; startY: number; currentX: number; currentY: number; id: number | null }>({
+export const MobileInterface: React.FC<MobileInterfaceProps> = ({ score, onMove, onDash }) => {
+  const [joystick, setJoystick] = useState({
     active: false,
-    startX: 0,
-    startY: 0,
-    currentX: 0,
-    currentY: 0,
-    id: null
+    baseX: 0,
+    baseY: 0,
+    stickX: 0,
+    stickY: 0,
+    touchId: null as number | null,
   });
 
-  const MAX_DIST = 50; // Радиус хода джойстика
+  const JOYSTICK_RADIUS = 60; // Радиус фона джойстика
 
   const handleTouchStart = (e: React.TouchEvent) => {
-    // Берем только левую половину экрана для джойстика
-    const t = Array.from(e.changedTouches).find(item => item.clientX < window.innerWidth / 2);
-    if (t) {
-      setTouch({
-        active: true,
-        startX: t.clientX,
-        startY: t.clientY,
-        currentX: t.clientX,
-        currentY: t.clientY,
-        id: t.identifier
-      });
-    }
+    // Реагируем только на касания в левой половине экрана
+    const touch = Array.from(e.changedTouches).find(t => t.clientX < window.innerWidth / 2);
+    if (!touch || joystick.active) return;
+
+    setJoystick({
+      active: true,
+      baseX: touch.clientX,
+      baseY: touch.clientY,
+      stickX: touch.clientX,
+      stickY: touch.clientY,
+      touchId: touch.identifier,
+    });
+    onMove(0, 0);
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
-    if (!touch.active) return;
-    const t = Array.from(e.touches).find(item => item.identifier === touch.id);
-    if (t) {
-      const dx = t.clientX - touch.startX;
-      const dy = t.clientY - touch.startY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      
-      const limitedX = dist > MAX_DIST ? (dx / dist) * MAX_DIST : dx;
-      const limitedY = dist > MAX_DIST ? (dy / dist) * MAX_DIST : dy;
+    if (!joystick.active) return;
+    const touch = Array.from(e.touches).find(t => t.identifier === joystick.touchId);
+    if (!touch) return;
 
-      setTouch(prev => ({ ...prev, currentX: touch.startX + limitedX, currentY: touch.startY + limitedY }));
-      
-      // Передаем нормализованные значения (-1..1) в движок
-      onMove(limitedX / MAX_DIST, limitedY / MAX_DIST);
-    }
+    const dx = touch.clientX - joystick.baseX;
+    const dy = touch.clientY - joystick.baseY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    
+    // Ограничиваем движение стика радиусом джойстика
+    const limitedDist = Math.min(distance, JOYSTICK_RADIUS);
+    const angle = Math.atan2(dy, dx);
+    
+    const moveX = Math.cos(angle) * limitedDist;
+    const moveY = Math.sin(angle) * limitedDist;
+
+    setJoystick(prev => ({
+      ...prev,
+      stickX: prev.baseX + moveX,
+      stickY: prev.baseY + moveY,
+    }));
+
+    // Передаем нормализованные значения (-1 до 1)
+    onMove(moveX / JOYSTICK_RADIUS, moveY / JOYSTICK_RADIUS);
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
-    const t = Array.from(e.changedTouches).find(item => item.identifier === touch.id);
-    if (t) {
-      setTouch({ active: false, startX: 0, startY: 0, currentX: 0, currentY: 0, id: null });
-      onMove(0, 0); // Остановка
+    const touch = Array.from(e.changedTouches).find(t => t.identifier === joystick.touchId);
+    if (touch) {
+      setJoystick({ active: false, baseX: 0, baseY: 0, stickX: 0, stickY: 0, touchId: null });
+      onMove(0, 0);
     }
   };
 
   return (
-    <div className="fixed inset-0 pointer-events-none select-none z-50">
-      {/* Счётчик верблюдов */}
-      <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-black/40 backdrop-blur-md px-6 py-2 rounded-full border border-white/10">
-        <span className="text-white font-black tracking-tighter text-2xl">🐪 {score}</span>
-      </div>
-
-      {/* Зона Джойстика (Лево) */}
-      <div 
-        className="absolute bottom-10 left-10 w-40 h-40 flex items-center justify-center pointer-events-auto"
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-      >
-        {/* Внешний круг */}
-        <div className="w-32 h-32 bg-white/5 border-2 border-white/10 rounded-full flex items-center justify-center">
-            {/* Стик (отображается при активном касании или в центре) */}
-            <div 
-              className="w-14 h-14 bg-blue-500 rounded-full shadow-[0_0_20px_rgba(59,130,246,0.5)] transition-transform duration-75"
-              style={{
-                transform: touch.active 
-                  ? `translate(${touch.currentX - touch.startX}px, ${touch.currentY - touch.startY}px)` 
-                  : 'translate(0px, 0px)'
-              }}
-            />
+    <div 
+      className="fixed inset-0 z-50 pointer-events-none select-none touch-none"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
+      {/* Верхняя панель: Счёт каравана */}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 pointer-events-auto">
+        <div className="bg-slate-900/40 backdrop-blur-md border border-white/10 px-8 py-2 rounded-full flex items-center gap-3 shadow-2xl">
+          <span className="text-3xl">🐪</span>
+          <span className="text-white text-2xl font-black italic">{score}</span>
         </div>
       </div>
 
-      {/* Кнопка Атаки (Право) */}
-      <div className="absolute bottom-12 right-12 pointer-events-auto">
-        <button 
-          onPointerDown={(e) => { e.preventDefault(); onSpit(); }}
-          className="w-24 h-24 bg-red-600 active:bg-red-700 active:scale-90 rounded-full border-4 border-white/20 shadow-xl flex items-center justify-center transition-all"
+      {/* Динамический Джойстик (виден только при нажатии) */}
+      {joystick.active && (
+        <div 
+          className="absolute w-32 h-32 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+          style={{ left: joystick.baseX, top: joystick.baseY }}
         >
-          <span className="text-white font-black text-xs uppercase">Плевок</span>
+          {/* Фон джойстика */}
+          <div className="w-full h-full bg-white/5 border-2 border-white/10 rounded-full flex items-center justify-center">
+            <div className="w-16 h-16 bg-white/5 rounded-full border border-white/5"></div>
+          </div>
+          {/* Стик (ручка) */}
+          <div 
+            className="absolute w-14 h-14 bg-white/20 backdrop-blur-sm rounded-full border-2 border-white/30 shadow-xl"
+            style={{ 
+              left: joystick.stickX - joystick.baseX + 32, // Центрирование
+              top: joystick.stickY - joystick.baseY + 32,
+              transform: 'translate(-50%, -50%)'
+            }}
+          >
+            <div className="absolute inset-2 bg-blue-500/40 rounded-full blur-sm"></div>
+          </div>
+        </div>
+      )}
+
+      {/* Кнопка "Рывок" (Справа) */}
+      <div className="absolute bottom-10 right-10 pointer-events-auto">
+        <button 
+          onPointerDown={(e) => { e.preventDefault(); onDash(); }}
+          className="w-24 h-24 bg-orange-600/80 active:bg-orange-500 backdrop-blur-md rounded-full border-4 border-white/20 shadow-2xl flex flex-col items-center justify-center transition-all active:scale-90"
+        >
+          <span className="text-3xl mb-[-4px]">⚡</span>
+          <span className="text-white text-[10px] font-black uppercase tracking-widest">Рывок</span>
         </button>
       </div>
+
+      {/* Инструкция (исчезает при игре) */}
+      {!joystick.active && score < 2 && (
+        <div className="absolute bottom-32 left-12 text-white/30 text-xs font-bold uppercase tracking-widest animate-pulse">
+          Тяни здесь для движения ←
+        </div>
+      )}
     </div>
   );
 };
