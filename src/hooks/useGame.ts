@@ -1,117 +1,144 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Peer from 'peerjs';
-import { CaravanPhysics } from '../utils/physics';
+import { generateMaze } from '../utils/maze'; // Старый импорт, не мешает
 
-const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'];
-const lerp = (start: number, end: number, t: number) => start * (1 - t) + end * t;
+const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b'];
 
 export function useGame() {
+  const [peer, setPeer] = useState<any>(null);
   const [myId, setMyId] = useState('');
-  const [gameState, setGameState] = useState<'LOBBY' | 'WAITING' | 'PLAYING'>('LOBBY');
+  const [gameState, setGameState] = useState('LOBBY');
   const [players, setPlayers] = useState([]);
-  const [food, setFood] = useState([]);
+  
+  // --- МЫ ДОБАВИЛИ ЭТОТ СТЕЙТ ---
+  const [food, setFood] = useState([]); // Верблюжата на карте
+  // -----------------------------
+
   const [isHost, setIsHost] = useState(false);
   const [playerName, setPlayerName] = useState('');
   
-  // ИСПОЛЬЗУЕМ REFS ДЛЯ МГНОВЕННОГО ДВИЖЕНИЯ
-  const velocityRef = useRef({ x: 0, y: 0 });
-  const angleRef = useRef(0);
-  const isDashingRef = useRef(false);
-
-  const connsRef = useRef<any[]>([]);
-  const peerRef = useRef<any>(null);
+  const connsRef = useRef([]);
   const playersRef = useRef([]);
+  const foodRef = useRef([]); // Реф для доступа к еде внутри интервала
 
-  useEffect(() => { playersRef.current = players; }, [players]);
+  useEffect(() => { 
+    playersRef.current = players; 
+    foodRef.current = food; // Синхронизируем реф
+  }, [players, food]);
 
-  // Чиним PeerJS
+  // Инициализация PeerJS
   useEffect(() => {
-    const peer = new Peer({
-      config: { 'iceServers': [{ url: 'stun:stun.l.google.com:19302' }] }
-    });
-    peer.on('open', (id) => { setMyId(id); console.log('✅ ID:', id); });
-    peerRef.current = peer;
-    return () => peer.destroy();
+    const newPeer = new Peer({ config: { 'iceServers': [{ url: 'stun:stun.l.google.com:19302' }] } });
+    newPeer.on('open', (id) => setMyId(id));
+    setPeer(newPeer);
+    return () => newPeer.destroy();
   }, []);
 
-  const broadcast = (data: any) => {
-    connsRef.current.forEach(c => { if (c.open) c.send(data); });
-  };
-
-  // Метод для джойстика и WASD
-  const setMoveInput = useCallback((x: number, y: number) => {
-    const speed = isDashingRef.current ? 8 : 4.5;
-    velocityRef.current = { x: x * speed, y: y * speed };
-    if (Math.abs(x) > 0.05 || Math.abs(y) > 0.05) {
-      angleRef.current = Math.atan2(y, x);
-    }
-  }, []);
-
-  const handleDash = useCallback(() => {
-    if (isDashingRef.current) return;
-    setPlayers(prev => {
-      const me = prev.find(p => p.id === myId);
-      if (!me || me.segments.length < 2) return prev;
-      isDashingRef.current = true;
-      const newSegments = me.segments.slice(0, -1);
-      setTimeout(() => { isDashingRef.current = false; }, 800);
-      return prev.map(p => p.id === myId ? { ...p, segments: newSegments } : p);
-    });
-  }, [myId]);
-
-  // ГЛАВНЫЙ ЦИКЛ (60 FPS)
+  // Основной цикл движения (60 FPS)
   useEffect(() => {
     if (gameState !== 'PLAYING') return;
 
     const interval = setInterval(() => {
       setPlayers(prev => {
         const me = prev.find(p => p.id === myId);
-        if (!me || !me.segments) return prev;
+        if (!me) return prev;
 
-        const head = me.segments[0];
-        const newHead = {
-          x: Math.max(0, Math.min(2000, head.x + velocityRef.current.x)),
-          y: Math.max(0, Math.min(2000, head.y + velocityRef.current.y)),
-          angle: angleRef.current
-        };
+        const currentHead = me.segments[0];
+        const newHead = { ...currentHead };
 
-        const newSegments = [...me.segments];
-        newSegments[0] = newHead;
-        const updated = CaravanPhysics.updateSegments(newSegments);
-        
-        const up = prev.map(p => p.id === myId ? { ...p, segments: updated } : p);
+        // WASD Управление
+        const speed = 5;
+        if (window.pressedKeys?.['w']) newHead.y -= speed;
+        if (window.pressedKeys?.['s']) newHead.y += speed;
+        if (window.pressedKeys?.['a']) newHead.x -= speed;
+        if (window.pressedKeys?.['d']) newHead.x += speed;
+
+        // Границы арены
+        newHead.x = Math.max(0, Math.min(2000, newHead.x));
+        newHead.y = Math.max(0, Math.min(2000, newHead.y));
+
+        // Логика Змейки (следование хвоста)
+        const updatedSegments = [newHead];
+        for (let i = 1; i < me.segments.length; i++) {
+            const prevSeg = me.segments[i-1];
+            const currSeg = me.segments[i];
+            const dx = prevSeg.x - currSeg.x;
+            const dy = prevSeg.y - currSeg.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            const minDist = 20; // Дистанция между верблюдами
+            
+            if (dist > minDist) {
+                const angle = Math.atan2(dy, dx);
+                updatedSegments.push({
+                    x: prevSeg.x - Math.cos(angle) * minDist,
+                    y: prevSeg.y - Math.sin(angle) * minDist
+                });
+            } else {
+                updatedSegments.push(currSeg);
+            }
+        }
+
+        const updatedPlayers = prev.map(p => p.id === myId ? { ...p, segments: updatedSegments } : p);
 
         // Отправка данных
-        if (isHost) broadcast({ type: 'PLAYERS_UPDATE', players: up });
-        else if (connsRef.current[0]?.open) {
-          connsRef.current[0].send({ type: 'MOVE_UPDATE', id: myId, segments: updated });
+        if (isHost) {
+          connsRef.current.forEach(c => c.open && c.send({ type: 'PLAYERS_UPDATE', players: updatedPlayers }));
+        } else {
+          connsRef.current[0]?.send({ type: 'MOVE_UPDATE', segments: updatedSegments });
         }
-        return up;
+
+        return updatedPlayers;
       });
     }, 1000 / 60);
 
     return () => clearInterval(interval);
   }, [gameState, myId, isHost]);
 
-  // Хостинг и подключение (без изменений, они работали)
-  const handleHost = async () => {
-    if (!myId || !playerName) return;
+
+  // --- ВОТ ЭТО МЫ ДОБАВИЛИ: СПАВН ЕДЫ (Только для хоста) ---
+  useEffect(() => {
+    if (!isHost || gameState !== 'PLAYING') return;
+
+    const spawnInterval = setInterval(() => {
+      // Спавним, только если еды мало
+      if (foodRef.current.length < 50) {
+        const newFood = {
+          id: Math.random().toString(36).substr(2, 9),
+          x: Math.random() * 1900 + 50, // Не спавним у самого края
+          y: Math.random() * 1900 + 50
+        };
+        const updatedFood = [...foodRef.current, newFood];
+        setFood(updatedFood);
+        
+        // Рассылаем всем игрокам новую еду
+        connsRef.current.forEach(c => c.open && c.send({ type: 'FOOD_SPAWN', food: updatedFood }));
+      }
+    }, 2000); // Раз в 2 секунды
+
+    return () => clearInterval(spawnInterval);
+  }, [isHost, gameState]);
+  // -------------------------------------------------------
+
+
+  // Хостинг и Вход (добавили синхронизацию еды при входе)
+  const handleHost = async (diff: string) => {
     setIsHost(true);
-    setPlayers([{ id: myId, name: playerName, color: COLORS[0], segments: [{ x: 1000, y: 1000, angle: 0 }] }]);
     setGameState('WAITING');
     await fetch('/api/rooms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: myId, hostName: playerName, type: 'arena' }) });
-    peerRef.current.on('connection', (conn) => {
+
+    setPlayers([{ id: myId, name: playerName, color: COLORS[0], segments: [{x: 1000, y: 1000}] }]);
+
+    peer.on('connection', (conn) => {
       conn.on('open', () => {
         connsRef.current.push(conn);
-        conn.send({ type: 'INIT_ARENA', players: playersRef.current });
+        conn.send({ type: 'INIT_ARENA', 
+          players: playersRef.current, 
+          food: foodRef.current // ОТПРАВЛЯЕМ ЕДУ
+        });
       });
       conn.on('data', (data: any) => {
-        if (data.type === 'JOIN_ARENA') {
-          const up = [...playersRef.current, { id: conn.peer, name: data.name, color: COLORS[playersRef.current.length % COLORS.length], segments: [{ x: 1000, y: 1000, angle: 0 }] }];
-          setPlayers(up); broadcast({ type: 'PLAYERS_UPDATE', players: up });
-        }
         if (data.type === 'MOVE_UPDATE') {
-          setPlayers(p => p.map(pl => pl.id === data.id ? { ...pl, segments: data.segments } : pl));
+          setPlayers(p => p.map(player => player.id === conn.peer ? { ...player, segments: data.segments } : player));
         }
       });
     });
@@ -119,14 +146,32 @@ export function useGame() {
 
   const handleJoin = useCallback((id: string) => {
     setGameState('WAITING');
-    const conn = peerRef.current.connect(id);
-    conn.on('open', () => { connsRef.current = [conn]; conn.send({ type: 'JOIN_ARENA', name: playerName }); });
-    conn.on('data', (data: any) => {
-      if (data.type === 'INIT_ARENA' || data.type === 'PLAYERS_UPDATE') setPlayers(data.players);
-      if (data.type === 'MOVE_UPDATE') setPlayers(p => p.map(pl => pl.id === data.id ? { ...pl, segments: data.segments } : pl));
-      if (data.type === 'GAME_START') setGameState('PLAYING');
+    const conn = peer.connect(id);
+    conn.on('open', () => {
+      connsRef.current = [conn];
+      conn.send({ type: 'JOIN_ARENA', name: playerName });
     });
-  }, [playerName]);
+    conn.on('data', (data: any) => {
+      if (data.type === 'INIT_ARENA') { 
+        setPlayers(data.players); 
+        setFood(data.food || []); // ПОЛУЧАЕМ ЕДУ
+      }
+    });
+  }, [peer, playerName]);
 
-  return { myId, playerName, setPlayerName, gameState, players, isHost, handleHost, handleJoin, handleStart: () => { setGameState('PLAYING'); broadcast({ type: 'GAME_START' }); }, setMoveInput, handleDash };
+  // Глобальный слушатель клавиш (чтобы WASD работал)
+  useEffect(() => {
+    window.pressedKeys = {};
+    const down = (e) => window.pressedKeys[e.key.toLowerCase()] = true;
+    const up = (e) => window.pressedKeys[e.key.toLowerCase()] = false;
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
+  }, []);
+
+  return { 
+    myId, playerName, setPlayerName, gameState, players, 
+    food, // ЭТО МЫ ТОЖЕ ВОЗВРАЩАЕМ
+    isHost, handleHost, handleJoin, handleStart: () => {} 
+  };
 }
